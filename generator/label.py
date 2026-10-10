@@ -6,8 +6,8 @@ from datetime import datetime
 
 class LabelGenerator:
     def __init__(self):
-        self.width = 200
-        self.height = 100
+        self.width = 400
+        self.height = 200
         self.label_data = {
             "type": "",
             "package": "",
@@ -24,49 +24,88 @@ class LabelGenerator:
         self.width = width
         self.height = height
 
-    def generate_qr_code(self, size=50):
-        qr_content = f"TYPE:{self.label_data['type']}|PKG:{self.label_data['package']}|RNG:{self.label_data['value_range']}"
-        qr = qrcode.QRCode(version=1, box_size=4, border=1)
-        qr.add_data(qr_content)
-        qr.make(fit=True)
-        qr_img = qr.make_image(fill_color="black", back_color="white")
-        return qr_img.resize((size, size), Image.LANCZOS)
-
     def set_print_date(self, value):
         self.print_date = value
 
+    def _load_font(self, size):
+        # 优先使用常见中文字体，保证中文/常规字符都能渲染
+        for name in ("msyh.ttc", "simhei.ttf", "simsun.ttc", "arial.ttf"):
+            try:
+                return ImageFont.truetype(name, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    def generate_qr_code(self, size=50):
+        qr_content = f"TYPE:{self.label_data['type']}|PKG:{self.label_data['package']}|RNG:{self.label_data['value_range']}"
+        qr = qrcode.QRCode(version=None, box_size=10, border=1)
+        qr.add_data(qr_content)
+        qr.make(fit=True)
+        qr_img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+        return qr_img.resize((size, size), Image.NEAREST)
+
     def generate_label_image(self):
-        img = Image.new("RGB", (self.width, self.height), "white")
+        W, H = self.width, self.height
+        img = Image.new("RGB", (W, H), "white")
         draw = ImageDraw.Draw(img)
 
-        try:
-            font_label = ImageFont.truetype("arial.ttf", 10)
-            font_value = ImageFont.truetype("arial.ttf", 16)
-            font_small = ImageFont.truetype("arial.ttf", 9)
-        except:
-            font_label = ImageFont.load_default()
-            font_value = ImageFont.load_default()
-            font_small = ImageFont.load_default()
+        margin = max(4, int(H * 0.06))
 
-        left_width = self.width * 65 // 100
-        right_width = self.width - left_width
+        # 字体按图像高度等比缩放
+        f_title = self._load_font(max(8, int(H * 0.11)))
+        f_value = self._load_font(max(10, int(H * 0.20)))
+        f_small = self._load_font(max(8, int(H * 0.10)))
 
-        draw.text((8, 5), "TYPE:", font=font_label, fill="black")
-        draw.text((8, 18), self.label_data["type"], font=font_value, fill="black")
-        draw.text((8, 40), "PKG:", font=font_small, fill="black")
-        draw.text((35, 40), self.label_data["package"], font=font_small, fill="black")
-        draw.text((8, 55), "RNG:", font=font_small, fill="black")
-        draw.text((35, 55), self.label_data["value_range"], font=font_small, fill="black")
+        # 右侧二维码区域：约占宽度 38%，且不超过高度
+        qr_size = min(int(W * 0.38), H - 2 * margin)
+        qr_size = max(qr_size, 20)
+        qr_img = self.generate_qr_code(size=qr_size)
 
+        # 左侧文本区域
+        left_x = margin
+        left_right = W - qr_size - margin * 2
+        left_width = left_right - left_x
+
+        # 二维码水平靠右居中，垂直居中
+        qr_x = W - qr_size - margin
+        qr_y = (H - qr_size) // 2
+
+        def text_w(text, font):
+            bbox = draw.textbbox((0, 0), text, font=font)
+            return bbox[2] - bbox[0]
+
+        def clamp_font(text, font, max_w):
+            # 若文字超宽则缩小字号
+            size = font.size
+            while size > 6 and text_w(text, font) > max_w:
+                size -= 1
+                font = self._load_font(size)
+            return font
+
+        # 垂直布局：TYPE / 值 / PKG / RNG / (日期)
+        rows = []
+        rows.append(("TYPE:", f_title))
+        rows.append((self.label_data["type"], f_value))
+        rows.append(("PKG: " + self.label_data["package"], f_small))
+        rows.append(("RNG: " + self.label_data["value_range"], f_small))
         if self.print_date:
-            current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-            draw.text((8, 70), current_time, font=font_small, fill="black")
+            rows.append((datetime.now().strftime("%Y-%m-%d %H:%M"), f_small))
 
-        qr_img = self.generate_qr_code(size=min(right_width - 6, self.height - 6))
-        qr_x = left_width + (right_width - qr_img.width) // 2
-        qr_y = (self.height - qr_img.height) // 2
+        # 计算每行高度并按间距均匀分布
+        heights = []
+        for text, font in rows:
+            bbox = draw.textbbox((0, 0), text, font=font)
+            heights.append(bbox[3] - bbox[1])
+        total_text_h = sum(heights)
+        gap = max(2, (H - 2 * margin - total_text_h) // (len(rows) + 1))
+
+        y = margin + gap
+        for (text, font), lh in zip(rows, heights):
+            font = clamp_font(text, font, left_width)
+            draw.text((left_x, y), text, font=font, fill="black")
+            y += lh + gap
+
         img.paste(qr_img, (qr_x, qr_y))
-
         return img
 
     def save_image(self, filepath):
