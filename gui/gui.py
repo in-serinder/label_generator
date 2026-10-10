@@ -25,6 +25,16 @@ class LabelGeneratorGUI:
         self.preview_image = None
         self.current_printer = None
         self.silent_print_var = tk.BooleanVar(value=False)
+        self.rotate_var = tk.BooleanVar(value=False)
+        self.size_list = [
+            "30*10", "30*15", "30*25", "30*80", "30*90", "32*25",
+            "35*10", "35*12", "35*15", "35*30", "35*35", "40*10",
+            "40*25", "40*30", "20*10", "20*15", "20*20", "25*10",
+            "25*15", "50*20", "30*40", "30*50", "30*55", "30*60",
+            "30*70", "40*15", "40*20", "50*15", "50*25", "50*30",
+            "50*35", "50*40", "50*54", "40*40", "40*50", "40*60",
+            "40*70", "40*80", "50*50"
+        ]
 
         self.create_widgets()
         self.load_printers()
@@ -56,13 +66,12 @@ class LabelGeneratorGUI:
         size_frame = ttk.LabelFrame(main_frame, text="Print Size", padding="10")
         size_frame.pack(fill=tk.X, pady=(0, 10))
 
-        ttk.Label(size_frame, text="Width (mm):").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.width_var = tk.StringVar(value="50")
-        ttk.Entry(size_frame, textvariable=self.width_var, width=15).grid(row=0, column=1, pady=5, padx=5)
+        ttk.Label(size_frame, text="Label Size (mm):").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.size_var = tk.StringVar(value="50*25")
+        size_combo = ttk.Combobox(size_frame, textvariable=self.size_var, width=15, values=self.size_list)
+        size_combo.grid(row=0, column=1, pady=5, padx=5)
 
-        ttk.Label(size_frame, text="Height (mm):").grid(row=0, column=2, sticky=tk.W, pady=5, padx=(10, 0))
-        self.height_var = tk.StringVar(value="25")
-        ttk.Entry(size_frame, textvariable=self.height_var, width=15).grid(row=0, column=3, pady=5, padx=5)
+        ttk.Label(size_frame, text="(Width*Height)").grid(row=0, column=2, sticky=tk.W, pady=5, padx=(10, 0))
 
         printer_frame = ttk.LabelFrame(main_frame, text="Printer", padding="10")
         printer_frame.pack(fill=tk.X, pady=(0, 10))
@@ -76,6 +85,8 @@ class LabelGeneratorGUI:
         ttk.Checkbutton(printer_frame, text="Print Date", variable=self.print_date_var).grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=5)
 
         ttk.Checkbutton(printer_frame, text="Silent print (no dialog)", variable=self.silent_print_var).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=5)
+
+        ttk.Checkbutton(printer_frame, text="Rotate 90 (for vertical label)", variable=self.rotate_var).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=5)
 
         preview_frame = ttk.LabelFrame(main_frame, text="Preview", padding="10")
         preview_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
@@ -102,6 +113,31 @@ class LabelGeneratorGUI:
             self.printer_combo["values"] = ["Default Printer"]
             self.current_printer = "Default Printer"
 
+    def _apply_rotation(self, img):
+        """勾选旋转时，把图像顺时针旋转 90 度（适配竖式标签纸）。"""
+        if self.rotate_var.get():
+                        return img.rotate(-90, expand=True)
+        return img
+
+    def _get_size_mm(self):
+        """从下拉框解析 "宽*高"，返回 (width, height) 或 None。"""
+        raw = self.size_var.get().strip()
+        raw = raw.replace("x", "*").replace("X", "*").replace("×", "*")
+        try:
+            parts = [p for p in raw.split("*") if p.strip()]
+            width = int(parts[0])
+            height = int(parts[1])
+        except (ValueError, IndexError):
+            messagebox.showwarning("Warning", "Invalid size. Please select from the list (e.g. 50*25).")
+            return None
+        if width <= 0 or height <= 0:
+            messagebox.showwarning("Warning", "Invalid size. Please select from the list (e.g. 50*25).")
+            return None
+        if width > 100 or height > 100:
+            messagebox.showwarning("Warning", "Size cannot exceed 100mm x 100mm!")
+            return None
+        return width, height
+
     def generate_preview(self):
         label_type = self.type_var.get()
         package = self.package_var.get()
@@ -111,23 +147,17 @@ class LabelGeneratorGUI:
             messagebox.showwarning("Warning", "Please fill in all fields!")
             return
 
-        try:
-            width = int(self.width_var.get())
-            height = int(self.height_var.get())
-            if width <= 0 or height <= 0:
-                raise ValueError()
-            if width > 70 or height > 70:
-                messagebox.showwarning("Warning", "Size cannot exceed 70mm x 70mm!")
-                return
-        except ValueError:
-            messagebox.showwarning("Warning", "Please enter valid width and height!")
+        size = self._get_size_mm()
+        if size is None:
             return
+        width, height = size
 
         self.label_generator.set_label_data(label_type, package, value_range)
         self.label_generator.set_print_date(self.print_date_var.get())
         self.label_generator.set_size(width * 8, height * 8)
 
         img = self.label_generator.generate_label_image()
+        img = self._apply_rotation(img)
         preview_w = min(560, img.width)
         preview_h = int(img.height * preview_w / img.width)
         img = img.resize((preview_w, preview_h), Image.LANCZOS)
@@ -189,12 +219,10 @@ class LabelGeneratorGUI:
             messagebox.showwarning("Warning", "Please generate preview first!")
             return
 
-        try:
-            width = int(self.width_var.get())
-            height = int(self.height_var.get())
-        except ValueError:
-            messagebox.showwarning("Warning", "Please enter valid width and height!")
+        size = self._get_size_mm()
+        if size is None:
             return
+        width, height = size
 
         chrome = self._find_chrome()
         if chrome is None:
@@ -205,7 +233,11 @@ class LabelGeneratorGUI:
             # 以 203dpi 生成清晰图像
             self.label_generator.set_size(width * 8, height * 8)
             img = self.label_generator.generate_label_image()
+            img = self._apply_rotation(img)
             img_b64 = self._image_to_base64_png(img)
+
+            # 旋转后纸张尺寸对调
+            paper_w, paper_h = (height, width) if self.rotate_var.get() else (width, height)
 
             silent = self.silent_print_var.get()
 
@@ -214,9 +246,9 @@ class LabelGeneratorGUI:
 <head>
 <meta charset="utf-8">
 <style>
-  @page {{ size: {width}mm {height}mm; margin: 0; }}
+  @page {{ size: {paper_w}mm {paper_h}mm; margin: 0; }}
   html, body {{ margin: 0; padding: 0; }}
-  img {{ display: block; width: {width}mm; height: {height}mm; }}
+  img {{ display: block; width: {paper_w}mm; height: {paper_h}mm; }}
 </style>
 </head>
 <body>
