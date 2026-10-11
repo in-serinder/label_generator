@@ -13,6 +13,12 @@ A Python-based material label generator with QR code support and Windows printer
 - **Preview**: Real-time label preview before printing
 - **Save Image**: Export label as PNG image
 
+## Preview
+
+![Label Preview](test_label.png)
+
+![GUI Preview](preview.png)
+
 ## Requirements
 
 ```
