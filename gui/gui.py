@@ -8,9 +8,9 @@ import subprocess
 import io
 import os
 import sys
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from generator.label import LabelGenerator
+from config import get_history_list, add_to_history
 
 
 class LabelGeneratorGUI:
@@ -48,19 +48,25 @@ class LabelGeneratorGUI:
 
         ttk.Label(input_frame, text="Type:").grid(row=0, column=0, sticky=tk.W, pady=5)
         self.type_var = tk.StringVar()
+        type_values = ["Resistor", "Capacitor", "Inductor", "Diode", "Transistor", "IC", "LED", "Fuse"]
+        type_values = type_values + get_history_list("types")
         type_combo = ttk.Combobox(input_frame, textvariable=self.type_var, width=30)
-        type_combo["values"] = ("Resistor", "Capacitor", "Inductor", "Diode", "Transistor", "IC", "LED", "Fuse")
+        type_combo["values"] = type_values
         type_combo.grid(row=0, column=1, pady=5, padx=5)
 
         ttk.Label(input_frame, text="Package:").grid(row=1, column=0, sticky=tk.W, pady=5)
         self.package_var = tk.StringVar()
+        package_values = ["0402", "0603", "0805", "1206", "SOT-23", "SOT-223", "QFP-32", "DIP-8", "DIP-16", "SOP-8", "SOP-16"]
+        package_values = package_values + get_history_list("packages")
         package_combo = ttk.Combobox(input_frame, textvariable=self.package_var, width=30)
-        package_combo["values"] = ("0402", "0603", "0805", "1206", "SOT-23", "SOT-223", "QFP-32", "DIP-8", "DIP-16", "SOP-8", "SOP-16")
+        package_combo["values"] = package_values
         package_combo.grid(row=1, column=1, pady=5, padx=5)
 
         ttk.Label(input_frame, text="Value Range:").grid(row=2, column=0, sticky=tk.W, pady=5)
         self.value_var = tk.StringVar()
-        value_entry = ttk.Entry(input_frame, textvariable=self.value_var, width=32)
+        value_values = get_history_list("values")
+        value_entry = ttk.Combobox(input_frame, textvariable=self.value_var, width=32)
+        value_entry["values"] = value_values
         value_entry.grid(row=2, column=1, pady=5, padx=5)
 
         size_frame = ttk.LabelFrame(main_frame, text="Print Size", padding="10")
@@ -146,6 +152,10 @@ class LabelGeneratorGUI:
         if not label_type or not package or not value_range:
             messagebox.showwarning("Warning", "Please fill in all fields!")
             return
+
+        add_to_history("types", label_type)
+        add_to_history("packages", package)
+        add_to_history("values", value_range)
 
         size = self._get_size_mm()
         if size is None:
