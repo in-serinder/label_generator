@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <title>Label Print (dtpweb)</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 28px;
+            font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+            background: #f4f7fa;
+            color: #1f2933;
+        }
+        h2 { margin: 0 0 6px 0; font-size: 18px; }
+        .sub { color: #6b7785; font-size: 13px; margin-bottom: 18px; }
+        #status {
+            padding: 12px 16px;
+            border-radius: 6px;
+            font-size: 15px;
+            margin-bottom: 14px;
+            border: 1px solid transparent;
+        }
+        .running { background: #eaf3fd; border-color: #bcd9f5; color: #1d4ed8; }
+        .ok { background: #e9f7ef; border-color: #b7e4c7; color: #1e7e34; }
+        .fail { background: #fdecea; border-color: #f5c2bd; color: #b02a1f; }
+        ul { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.9; color: #52606d; }
+        code { background: #eef1f5; padding: 1px 5px; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <h2>标签打印（dtpweb 接口）</h2>
+    <div class="sub">本页面由 Label Generator 自动拉起，用于调用德佟 dtpweb 打印助手完成标签打印。</div>
+    <div id="status" class="running">正在初始化打印接口…</div>
+    <ul id="steps"></ul>
+
+    <script type="text/javascript" src="./lib/dtpweb.js"></script>
+    <script type="text/javascript">
+    (function () {
+        var statusEl = document.getElementById("status");
+        var stepsEl = document.getElementById("steps");
+
+        var stepsLog = [];
+        function step(text) {
+            stepsLog.push(text);
+            var li = document.createElement("li");
+            li.textContent = text;
+            stepsEl.appendChild(li);
+        }
+        function setStatus(cls, text) {
+            statusEl.className = cls;
+            statusEl.textContent = text;
+        }
+        function report(result) {
+            result.steps = stepsLog.slice();
+            var payload = JSON.stringify(result);
+            try {
+                fetch("/__result", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: payload
+                });
+            } catch (e) { /* 忽略上报失败 */ }
+            if (result.ok) {
+                setStatus("ok", "打印任务已提交。");
+                setTimeout(function () { window.close(); }, 1200);
+            } else {
+                setStatus("fail", "打印失败：" + result.message);
+            }
+        }
+
+        /**
+         * 统一调用封装：兼容新版（同步返回 boolean + callback）与
+         * 旧版（返回 Promise）两种接口形态。
+         */
+        function invoke(api, method, arg) {
+            return new Promise(function (resolve) {
+                var done = false;
+                var finish = function (value) {
+                    if (done) return;
+                    done = true;
+                    resolve(value !== false);
+                };
+                try {
+                    var ret = api[method](arg, function (cb) {
+                        if (cb && typeof cb === "object" && "statusCode" in cb) {
+                            finish(cb.statusCode === 0);
+                        } else {
+                            finish(cb === undefined ? true : cb !== false);
+                        }
+                    });
+                    if (ret && typeof ret.then === "function") {
+                        ret.then(function (v) { finish(v === undefined ? true : v); })
+                           .catch(function () { finish(false); });
+                    } else if (typeof ret === "boolean") {
+                        finish(ret);
+                    } else if (ret === undefined) {
+                        // 等待回调，兜底超时
+                        setTimeout(function () { finish(true); }, 5000);
+                    } else {
+                        finish(true);
+                    }
+                } catch (e) {
+                    finish(false);
+                }
+            });
+        }
+
+        function resolvePrinters(api) {
+            return new Promise(function (resolve) {
+                var ret;
+                try {
+                    ret = api.getPrinters({ onlyLocal: false });
+                } catch (e) {
+                    resolve([]);
+                    return;
+                }
+                if (ret && typeof ret.then === "function") {
+                    ret.then(function (v) { resolve(v || []); }).catch(function () { resolve([]); });
+                } else {
+                    resolve(ret || []);
+                }
+            });
+        }
+
+        function getApi() {
+            if (typeof dtpweb === "undefined") {
+                return Promise.reject(new Error("dtpweb.js 未加载，请检查 printer/web/lib/dtpweb.js 是否存在"));
+            }
+            // 新版接口：dtpweb.getInstance() + checkPlugin
+            if (typeof dtpweb.getInstance === "function") {
+                return new Promise(function (resolve, reject) {
+                    var api = dtpweb.getInstance();
+                    api.checkPlugin({
+                        timeout: 3000,
+                        callback: function (resp) {
+                            if (resp && resp.statusCode === 0) resolve(api);
+                            else reject(new Error("未检测到 dtpweb 打印助手（statusCode=" +
+                                (resp ? resp.statusCode : "?") + "），请先安装打印助手或打印机驱动"));
+                        }
+                    });
+                });
+            }
+            // 旧版接口：dtpweb.DTPWeb.getApi()
+            if (dtpweb.DTPWeb && typeof dtpweb.DTPWeb.getApi === "function") {
+                return dtpweb.DTPWeb.getApi().then(function (value) {
+                    if (!value) throw new Error("接口不可用，请检查打印助手是否已安装");
+                    return value;
+                });
+            }
+            return Promise.reject(new Error("无法识别的 dtpweb 接口版本"));
+        }
+
+        function drawItem(api, item) {
+            if (item.type === "text") {
+                return invoke(api, "drawText", {
+                    text: item.text,
+                    x: item.x,
+                    y: item.y,
+                    width: item.width,
+                    height: item.height,
+                    fontName: item.fontName,
+                    fontHeight: item.fontHeight,
+                    fontStyle: item.fontStyle || 0,
+                    charSpace: item.charSpace || 0,
+                    lineSpace: 1,
+                    horizontalAlignment: 0,
+                    verticalAlignment: 0,
+                    autoReturn: 0
+                });
+            }
+            if (item.type === "qrcode") {
+                return invoke(api, "draw2DQRCode", {
+                    text: item.text,
+                    x: item.x,
+                    y: item.y,
+                    width: item.size,
+                    height: item.size
+                });
+            }
+            return Promise.resolve(true);
+        }
+
+        async function run() {
+            var action = "print";
+            try {
+                var params = new URLSearchParams(location.search);
+                if (params.get("action")) action = params.get("action");
+            } catch (e) { /* 使用默认动作 */ }
+
+            var job = {};
+            if (action === "print") {
+                try {
+                    var resp = await fetch("job.json", { cache: "no-store" });
+                    job = await resp.json();
+                } catch (e) {
+                    report({ ok: false, code: -1, message: "读取打印任务配置失败：" + e.message });
+                    return;
+                }
+            }
+
+            var api;
+            try {
+                api = await getApi();
+                step("打印助手检测通过");
+            } catch (e) {
+                report({ ok: false, code: -2, message: e.message });
+                return;
+            }
+
+            if (action === "printers") {
+                var printers = await resolvePrinters(api);
+                report({
+                    ok: true,
+                    code: 0,
+                    message: "查询成功",
+                    printers: printers.map(function (p) {
+                        return {
+                            name: p.name,
+                            deviceName: p.deviceName,
+                            ip: p.ip,
+                            port: p.port,
+                            type: p.type,
+                            isLocal: api.isLocalPrinter ? !!api.isLocalPrinter(p) : true
+                        };
+                    })
+                });
+                return;            }
+
+            try {
+                // 优先使用打印助手返回的完整设备信息（含 ip/port/type），
+                // 未指定打印机时自动取列表中的第一台。
+                var printerName = (job.printerName || "").trim();
+                var devices = await resolvePrinters(api);
+                var target = undefined;
+                if (printerName) {
+                    var parts = printerName.split("@");
+                    var baseName = parts[0];
+                    var targetIp = parts[1];
+                    target = (devices || []).find(function (d) {
+                        return (d.name && d.name === baseName) ||
+                               (d.deviceName && d.deviceName === baseName);
+                    });
+                    if (!target) {
+                        target = { name: baseName, printerName: baseName };
+                        if (targetIp) target.ip = targetIp;
+                    }
+                } else if (devices && devices.length > 0) {
+                    target = devices[0];
+                    printerName = devices[0].name || devices[0].deviceName || "";
+                }
+                var opened = await invoke(api, "openPrinter", target);
+                if (!opened) throw new Error("打开打印机失败，请确认打印机已连接且名称正确");
+                step("已连接打印机：" + (printerName || "默认打印机"));
+
+                // 打印参数（255 表示随打印机设置）
+                if (job.gapType != null && job.gapType !== 255) api.setGapType(job.gapType);
+                if (job.darkness != null && job.darkness !== 255) api.setPrintDarkness(job.darkness);
+                if (job.speed != null && job.speed !== 255) api.setPrintSpeed(job.speed);
+
+                var started = await invoke(api, "startJob", {
+                    width: job.paperWidth,
+                    height: job.paperHeight,
+                    orientation: job.orientation || 0,
+                    jobName: job.jobName || "LabelGenerator"
+                });
+                if (!started) throw new Error("创建打印任务失败");
+                step("已创建打印任务：" + job.paperWidth + "mm × " + job.paperHeight + "mm");
+
+                var items = job.items || [];
+                for (var i = 0; i < items.length; i++) {
+                    var ok = await drawItem(api, items[i]);
+                    if (!ok) throw new Error("绘制第 " + (i + 1) + " 个标签元素失败");
+                }
+                step("标签内容绘制完成（共 " + items.length + " 个元素）");
+
+                await invoke(api, "commitJob", { copies: job.copies || 1 });
+                step("打印任务已提交");
+                api.closePrinter();
+                report({ ok: true, code: 0, message: "打印完成" });
+            } catch (e) {
+                try { api.closePrinter(); } catch (_) { /* 忽略关闭异常 */ }
+                report({ ok: false, code: -3, message: e.message });
+            }
+        }
+
+        window.addEventListener("load", function () {
+            run();
+        });
+    })();
+    </script>
+</body>
+</html>

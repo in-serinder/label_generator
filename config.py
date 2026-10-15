@@ -4,7 +4,12 @@ import configparser
 CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
 HISTORY_FILE = os.path.join(CONFIG_DIR, "history.ini")
 
-config = configparser.ConfigParser()
+# 关闭插值：历史记录里可能包含 "%"（如 "10K 1%"），
+# 默认的 BasicInterpolation 会把它当作插值符号并抛异常。
+config = configparser.ConfigParser(interpolation=None)
+
+# 默认标签尺寸（宽*高，毫米）
+DEFAULT_SIZE = "50*25"
 
 
 def load_history():
@@ -35,18 +40,40 @@ def get_history_list(section):
     return []
 
 
-def add_to_history(section, new_value):
-    if not new_value.strip():
+def get_last_size(default=DEFAULT_SIZE):
+    """读取上一次打印使用的标签尺寸，形如 "50*25"。"""
+    load_history()
+    try:
+        value = config.get("size", "last").strip()
+    except Exception:
+        value = ""
+    return value or default
+
+
+def save_last_size(value):
+    """记录本次打印使用的标签尺寸，下次启动自动回填。"""
+    if not value or not str(value).strip():
         return
     load_history()
+    if not config.has_section("size"):
+        config["size"] = {}
+    config["size"]["last"] = str(value).strip()
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        config.write(f)
+
+
+def add_to_history(section, new_value):
+    if not new_value or not new_value.strip():
+        return
+    load_history()
+    if not config.has_section("history"):
+        config["history"] = {"types": "", "packages": "", "values": ""}
     items = get_history_list(section)
-    if new_value not in items:
-        items.insert(0, new_value)
-        if len(items) > 50:
-            items = items[:50]
-        if section == "types":
-            save_history(",".join(items), config.get("history", "packages") if config.has_option("history", "packages") else "", config.get("history", "values") if config.has_option("history", "values") else "")
-        elif section == "packages":
-            save_history(config.get("history", "types") if config.has_option("history", "types") else "", ",".join(items), config.get("history", "values") if config.has_option("history", "values") else "")
-        elif section == "values":
-            save_history(config.get("history", "types") if config.has_option("history", "types") else "", config.get("history", "packages") if config.has_option("history", "packages") else "", ",".join(items))
+    if new_value in items:
+        return
+    items.insert(0, new_value)
+    # 最多保留最近 50 条
+    del items[50:]
+    config["history"][section] = ",".join(items)
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        config.write(f)
